@@ -1,18 +1,64 @@
+'use strict';
+
 const { Pool } = require('pg');
+const logger = require('../utils/logger');
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: {
-    rejectUnauthorized: false,
-  },
+  ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : false,
+  max: 20,
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 5000,
 });
 
 pool.on('connect', () => {
-  console.log('✅ PostgreSQL conectado');
+  logger.debug('Nueva conexión establecida con PostgreSQL');
 });
 
 pool.on('error', (err) => {
-  console.error('❌ Error PostgreSQL:', err);
+  logger.error('Error inesperado en el pool de PostgreSQL', { error: err.message });
+  process.exit(-1);
 });
 
-module.exports = pool;
+/**
+ * Ejecuta una query con parámetros.
+ * @param {string} text - SQL query
+ * @param {Array} params - Parámetros de la query
+ */
+async function query(text, params) {
+  const start = Date.now();
+  try {
+    const result = await pool.query(text, params);
+    const duration = Date.now() - start;
+    logger.debug('Query ejecutada', { duration_ms: duration, rows: result.rowCount });
+    return result;
+  } catch (err) {
+    logger.error('Error ejecutando query', { error: err.message, query: text });
+    throw err;
+  }
+}
+
+/**
+ * Obtiene un cliente del pool para transacciones.
+ */
+async function getClient() {
+  const client = await pool.connect();
+  const originalQuery = client.query.bind(client);
+  const release = client.release.bind(client);
+
+  // Wrapper para loggear queries dentro de transacciones
+  client.query = (...args) => {
+    client.lastQuery = args[0];
+    return originalQuery(...args);
+  };
+
+  client.release = () => {
+    client.query = originalQuery;
+    client.release = release;
+    return release();
+  };
+
+  return client;
+}
+
+module.exports = { query, getClient, pool };
