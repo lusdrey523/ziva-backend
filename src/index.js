@@ -1,6 +1,17 @@
 'use strict';
 
-require('dotenv').config();
+// Cargar variables de entorno (solo si existe .env local)
+try {
+  require('dotenv').config();
+} catch (err) {
+  // dotenv es opcional en producción
+}
+
+// Validar que DATABASE_URL esté disponible
+if (!process.env.DATABASE_URL) {
+  console.error('ERROR: DATABASE_URL no está definida. Verifica que la variable esté configurada en Railway.');
+  process.exit(1);
+}
 
 const express = require('express');
 const { securityHeaders, zivaHeaders, enforceHttps } = require('./middlewares/security');
@@ -95,3 +106,4 @@ process.on('SIGTERM', async () => {
 startServer();
 
 module.exports = app; // Para testing
+
