@@ -1,6 +1,10 @@
+
 'use strict';
 
-require('dotenv').config();
+if (process.env.NODE_ENV !== 'production') {
+  require('dotenv').config();
+}
+
 const { pool } = require('./pool');
 
 const MIGRATION_SQL = `
@@ -151,4 +155,3 @@ migrate().catch((err) => {
   console.error(err);
   process.exit(1);
 });
-
