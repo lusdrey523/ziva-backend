@@ -1,103 +1,48 @@
 'use strict';
 
-// ─── SINGLE SOURCE OF TRUTH ───────────────────────────────────────────────────
-// Este es el ÚNICO archivo en todo el codebase que instancia Pool.
-// Ningún otro archivo debe importar 'pg' ni crear conexiones directamente.
-
 const { Pool } = require('pg');
-const logger = require('../utils/logger');
 
-// ─── CONSTANTES DE RETRY ──────────────────────────────────────────────────────
-const MAX_RETRIES       = 5;
-const BASE_BACKOFF_MS   = 500;   // Backoff inicial: 500ms, 1s, 2s, 4s, 8s
-const CONNECT_TIMEOUT   = 10000; // 10 segundos por intento de conexión
-const IDLE_TIMEOUT      = 30000;
-const POOL_MAX          = 20;
-
-// ─── VALIDACIÓN DE ENV (CRÍTICA — FAIL FAST) ──────────────────────────────────
-// Se ejecuta en el momento que el módulo es requerido por primera vez.
 if (!process.env.DATABASE_URL) {
-  // Log sin exponer credenciales (DATABASE_URL podría no existir, no hay nada que ocultar)
-  logger.error('[DB] FATAL: La variable de entorno DATABASE_URL no está definida.');
-  logger.error('[DB] En Railway: Settings → Variables → Add DATABASE_URL');
-  process.exit(1);
+  throw new Error('❌ DATABASE_URL no está definida');
 }
 
-// Sanitizar la URL para logging: ocultar user:password
-function sanitizeDbUrl(url) {
-  try {
-    const parsed = new URL(url);
-    return `${parsed.protocol}//${parsed.host}${parsed.pathname}`;
-  } catch {
-    return '[URL_INVÁLIDA]';
-  }
-}
+const isProduction = process.env.NODE_ENV === 'production';
 
-const SAFE_DB_URL = sanitizeDbUrl(process.env.DATABASE_URL);
-
-// ─── INSTANCIA ÚNICA DEL POOL ─────────────────────────────────────────────────
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  // Railway requiere SSL con rejectUnauthorized: false (certificado auto-firmado)
-  ssl: { rejectUnauthorized: false },
-  max:                    POOL_MAX,
-  idleTimeoutMillis:      IDLE_TIMEOUT,
-  connectionTimeoutMillis: CONNECT_TIMEOUT,
-  // Asegurar que NUNCA se use localhost como fallback
-  // (connectionString tiene prioridad total sobre host/port individuales)
+
+  ssl: isProduction
+    ? {
+        rejectUnauthorized: false,
+      }
+    : false,
+
+  max: 10,
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 10000,
 });
 
-// ─── EVENTOS DEL POOL ─────────────────────────────────────────────────────────
-pool.on('connect', (client) => {
-  logger.debug('[DB] Cliente conectado al pool', { host: SAFE_DB_URL });
-});
-
-pool.on('acquire', () => {
-  logger.debug('[DB] Cliente adquirido del pool');
-});
-
-pool.on('remove', () => {
-  logger.debug('[DB] Cliente removido del pool');
-});
-
-pool.on('error', (err) => {
-  // Error en cliente idle — no exponer stack completo en producción
-  logger.error('[DB] Error inesperado en cliente idle del pool', {
-    message: err.message,
-    code:    err.code,
+// Test de conexión al iniciar
+pool
+  .connect()
+  .then((client) => {
+    console.log('✅ PostgreSQL conectado correctamente');
+    client.release();
+  })
+  .catch((err) => {
+    console.error('❌ Error conectando a PostgreSQL:', err.message);
+    process.exit(1);
   });
-  // No hacer process.exit aquí — el pool intentará recuperarse solo.
-  // El exit fatal ocurre en initDB() si no se puede reconectar.
-});
 
-// ─── FUNCIÓN DE INIT CON RETRY ────────────────────────────────────────────────
+async function query(text, params) {
+  return pool.query(text, params);
+}
 
-/**
- * Inicializa y verifica la conexión a la base de datos.
- * Implementa retry con backoff exponencial (5 intentos).
- * 
- * DEBE ser llamada antes de iniciar el servidor HTTP.
- * Si falla todos los intentos → process.exit(1)
- * 
- * @returns {Promise<void>}
- */
-async function initDB() {
-  logger.info('[DB] Iniciando conexión a PostgreSQL...', { target: SAFE_DB_URL });
+async function getClient() {
+  return pool.connect();
+}
 
-  let lastError;
-
-  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-    try {
-      // Adquirir un cliente del pool y ejecutar health check
-      const client = await pool.connect();
-      try {
-        await client.query('SELECT 1');
-        logger.info(`[DB] Conexión establecida exitosamente`, {
-          attempt,
-          target:   SAFE_DB_URL,
-          pool_max: POOL_MAX,
-        });
-        return; // ✅ Conexión exitosa — salir del loop
+module.exports = { pool, query, getClient };        return; // ✅ Conexión exitosa — salir del loop
       } finally {
         client.release();
       }
