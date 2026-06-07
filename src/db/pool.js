@@ -20,10 +20,44 @@ pool.on('connect', () => {
   logger.debug('Nueva conexión establecida con PostgreSQL');
 });
 
+// Manejo de errores del pool: loguear pero no terminar el proceso.
+// El pool de `pg` reintentará conexiones según su propia lógica.
 pool.on('error', (err) => {
   logger.error('Error inesperado en el pool de PostgreSQL', { error: err.message });
-  process.exit(-1);
 });
+
+// Espera la disponibilidad de la base de datos intentando `pool.connect()`.
+// No ejecuta queries durante el proceso de verificación (cumple regla).
+async function waitForConnection(options = {}) {
+  const maxRetries = parseInt(options.maxRetries || process.env.DB_CONN_MAX_RETRIES || '15', 10);
+  const baseDelay = parseInt(options.baseDelayMs || process.env.DB_CONN_BASE_DELAY_MS || '3000', 10);
+  const factor = parseFloat(options.factor || process.env.DB_CONN_BACKOFF_FACTOR || '1.7');
+  const jitter = parseFloat(options.jitter || process.env.DB_CONN_JITTER || '0.3');
+
+  // Evitar usar localhost en producción
+  if (process.env.NODE_ENV === 'production' && /localhost|127\.0\.0\.1/.test(connectionString || '')) {
+    throw new Error('Conexión inválida: no use localhost en producción. Configure process.env.DATABASE_URL correctamente.');
+  }
+
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      const client = await pool.connect();
+      client.release();
+      return;
+    } catch (err) {
+      const attemptNum = attempt + 1;
+      logger.warn(`Intento ${attemptNum}/${maxRetries} para conectar a la DB falló`, { error: err.message });
+      if (attempt + 1 >= maxRetries) break;
+      // Exponential backoff con jitter
+      const backoff = Math.min(60000, Math.round(baseDelay * Math.pow(factor, attempt)));
+      const jitterMs = Math.round((Math.random() * 2 - 1) * jitter * backoff);
+      const waitMs = Math.max(500, backoff + jitterMs);
+      await new Promise((res) => setTimeout(res, waitMs));
+    }
+  }
+
+  throw new Error('DB no disponible después de múltiples intentos');
+}
 
 /**
  * Ejecuta una query con parámetros.
@@ -66,4 +100,4 @@ async function getClient() {
   return client;
 }
 
-module.exports = { query, getClient, pool };
+module.exports = { query, getClient, pool, waitForConnection };

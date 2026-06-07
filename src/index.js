@@ -80,36 +80,18 @@ app.use(errorHandler);
 // ─── INICIO DEL SERVIDOR ──────────────────────────────────────────────────────
 const PORT = parseInt(process.env.PORT || '3000', 10);
 
-// Espera la disponibilidad de la DB con reintentos para evitar crash loops en plataformas como Railway
-async function waitForDB() {
-  const { pool } = require('./db/pool');
-  const maxRetries = 15;
-  const delay = 3000;
+// Espera la disponibilidad de la DB con reintentos sin ejecutar queries (usa pool.connect())
+const { waitForConnection } = require('./db/pool');
 
-  // Log temporal para depuración inicial de despliegue
-  try {
-    console.log('DATABASE_URL:', process.env.DATABASE_URL?.slice(0, 30));
-  } catch (_) {}
-
-  for (let i = 0; i < maxRetries; i++) {
-    try {
-      await pool.query('SELECT 1');
-      logger.info('✅ DB lista');
-      return;
-    } catch (err) {
-      logger.warn(`⏳ DB no lista (${i + 1}/${maxRetries})`, { error: err.message });
-      // esperar antes del siguiente intento
-      await new Promise((res) => setTimeout(res, delay));
-    }
-  }
-
-  throw new Error('❌ DB nunca respondió');
-}
+// Log temporal para depuración inicial de despliegue (muestra sólo prefijo)
+try {
+  console.log('DATABASE_URL:', process.env.DATABASE_URL?.slice(0, 30));
+} catch (_) {}
 
 async function start() {
   try {
-    logger.info('🔌 Intentando conectar a DB...');
-    await waitForDB(); // ← Resiliencia: esperar DB antes de arrancar
+    logger.info('🔌 Intentando conectar a DB (connect-only) ...');
+    await waitForConnection(); // ← Resiliencia: esperar DB antes de arrancar sin ejecutar queries
 
     app.listen(PORT, () => {
       logger.info(`ZIVA Identity Platform iniciada`, {
