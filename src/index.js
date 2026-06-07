@@ -80,12 +80,36 @@ app.use(errorHandler);
 // ─── INICIO DEL SERVIDOR ──────────────────────────────────────────────────────
 const PORT = parseInt(process.env.PORT || '3000', 10);
 
-async function startServer() {
+// Espera la disponibilidad de la DB con reintentos para evitar crash loops en plataformas como Railway
+async function waitForDB() {
+  const { pool } = require('./db/pool');
+  const maxRetries = 15;
+  const delay = 3000;
+
+  // Log temporal para depuración inicial de despliegue
   try {
-    // Verificar conexión a base de datos antes de iniciar
-    const db = require('./db/pool');
-    await db.query('SELECT 1');
-    logger.info('Conexión a PostgreSQL establecida correctamente');
+    console.log('DATABASE_URL:', process.env.DATABASE_URL?.slice(0, 30));
+  } catch (_) {}
+
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      await pool.query('SELECT 1');
+      logger.info('✅ DB lista');
+      return;
+    } catch (err) {
+      logger.warn(`⏳ DB no lista (${i + 1}/${maxRetries})`, { error: err.message });
+      // esperar antes del siguiente intento
+      await new Promise((res) => setTimeout(res, delay));
+    }
+  }
+
+  throw new Error('❌ DB nunca respondió');
+}
+
+async function start() {
+  try {
+    logger.info('🔌 Intentando conectar a DB...');
+    await waitForDB(); // ← Resiliencia: esperar DB antes de arrancar
 
     app.listen(PORT, () => {
       logger.info(`ZIVA Identity Platform iniciada`, {
@@ -95,7 +119,7 @@ async function startServer() {
       });
     });
   } catch (err) {
-    logger.error('Error al iniciar el servidor', { error: err.message });
+    logger.error('❌ FATAL: No se pudo iniciar la app', { error: err.message });
     process.exit(1);
   }
 }
@@ -127,6 +151,6 @@ process.on('SIGTERM', async () => {
   }
 });
 
-startServer();
+start();
 
 module.exports = app; // Para testing
