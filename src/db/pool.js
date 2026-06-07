@@ -3,10 +3,15 @@
 const { Pool } = require('pg');
 const logger = require('../utils/logger');
 
+// Determinar SSL automáticamente si se indica en DATABASE_URL
+const connectionString = process.env.DATABASE_URL;
+const dbSslEnv = String(process.env.DB_SSL || '').toLowerCase();
+const shouldUseSsl = dbSslEnv === 'true' || /sslmode=require|ssl=true/i.test(connectionString || '');
+
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : false,
-  max: 20,
+  connectionString,
+  ssl: shouldUseSsl ? { rejectUnauthorized: false } : false,
+  max: parseInt(process.env.DB_POOL_MAX || '20', 10),
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 5000,
 });

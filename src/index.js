@@ -8,10 +8,25 @@ try {
 }
 
 // Validar que DATABASE_URL esté disponible
-if (!process.env.DATABASE_URL) {
-  console.error('ERROR: DATABASE_URL no está definida. Verifica que la variable esté configurada en Railway.');
-  process.exit(1);
+function validateEnv() {
+  if (!process.env.DATABASE_URL) {
+    console.error('ERROR: DATABASE_URL no está definida. Verifica que la variable esté configurada en Railway.');
+    process.exit(1);
+  }
+
+  // En producción, recomendar variables críticas adicionales
+  if (process.env.NODE_ENV === 'production') {
+    if (!process.env.DB_SSL && !/sslmode=/i.test(process.env.DATABASE_URL || '')) {
+      console.warn('WARN: DB_SSL no está definida. Se recomienda establecer DB_SSL=true en Railway.');
+    }
+
+    if (!process.env.JWT_SECRET && !process.env.PRIVATE_KEY) {
+      console.warn('WARN: JWT_SECRET o PRIVATE_KEY no están definidas. Verifica que los secretos necesarios estén configurados en Railway.');
+    }
+  }
 }
+
+validateEnv();
 
 const express = require('express');
 const { securityHeaders, zivaHeaders, enforceHttps } = require('./middlewares/security');
@@ -98,9 +113,18 @@ process.on('uncaughtException', (err) => {
 // Graceful shutdown
 process.on('SIGTERM', async () => {
   logger.info('SIGTERM recibido, cerrando servidor...');
-  const { pool } = require('./db/pool');
-  await pool.end();
-  process.exit(0);
+  try {
+    const { pool } = require('./db/pool');
+    // Intentar cerrar conexiones con timeout razonable
+    const shutdownPromise = pool.end();
+    const timeout = new Promise((resolve) => setTimeout(resolve, 5000));
+    await Promise.race([shutdownPromise, timeout]);
+    logger.info('Pool de DB cerrado (o timeout alcanzado)');
+  } catch (err) {
+    logger.error('Error durante shutdown', { error: err.message });
+  } finally {
+    process.exit(0);
+  }
 });
 
 startServer();
